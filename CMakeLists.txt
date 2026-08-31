@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(OrientMatch
     VERSION 0.1.0
     DESCRIPTION "Dense gradient-orientation template matching for OpenCV"
-    HOMEPAGE_URL "https://github.com/hijimasa/gradient-orientation-template-matching"
+    HOMEPAGE_URL "https://github.com/hijimasa/orient-match"
     LANGUAGES CXX)
 
 include(CTest)

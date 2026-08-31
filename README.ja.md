@@ -1,4 +1,4 @@
-# OrientMatch
+# OrientMatch — Gradient-Orientation Template Matching for OpenCV
 
 **日本語** | [English](README.md)
 
