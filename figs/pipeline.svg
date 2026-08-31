@@ -1,0 +1,169 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="760" viewBox="0 0 1440 760" role="img" aria-labelledby="title desc">
+  <title id="title">OrientMatch processing pipeline</title>
+  <desc id="desc">A template and search image are converted to dense gradient-orientation fields. A coarse global search over position and rotation retains the top K poses, which are refined locally at full resolution to return center, angle, and score.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#748094"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#172033" flood-opacity="0.13"/>
+    </filter>
+    <linearGradient id="fieldGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#00a896"/>
+      <stop offset="0.5" stop-color="#4c6ef5"/>
+      <stop offset="1" stop-color="#9b5de5"/>
+    </linearGradient>
+    <linearGradient id="heatGradient" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#edf2f7"/>
+      <stop offset="0.6" stop-color="#ffd6a5"/>
+      <stop offset="1" stop-color="#f77f00"/>
+    </linearGradient>
+    <pattern id="grid" width="18" height="18" patternUnits="userSpaceOnUse">
+      <path d="M18 0H0V18" fill="none" stroke="#d8dee9" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1440" height="760" fill="#f7f9fc"/>
+  <text x="720" y="46" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="28" font-weight="700" fill="#172033">OrientMatch: dense orientation correlation, coarse to fine</text>
+  <text x="720" y="76" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" fill="#5f6b7a">One template · known scale · translation + in-plane rotation · one best pose</text>
+
+  <!-- Input cards -->
+  <g filter="url(#shadow)">
+    <rect x="32" y="126" width="238" height="216" rx="16" fill="#ffffff" stroke="#d9deea"/>
+    <rect x="32" y="404" width="238" height="246" rx="16" fill="#ffffff" stroke="#d9deea"/>
+  </g>
+  <rect x="32" y="126" width="238" height="42" rx="16" fill="#6c5ce7"/>
+  <path d="M32 152V168H270V152" fill="#6c5ce7"/>
+  <text x="151" y="153" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="700" fill="#ffffff">Template</text>
+  <rect x="61" y="188" width="180" height="112" rx="7" fill="#e5e9f0" stroke="#b9c1cf"/>
+  <rect x="80" y="207" width="77" height="19" rx="3" fill="#4c566a"/>
+  <circle cx="191" cy="260" r="22" fill="#7b879b"/>
+  <path d="M84 278 L154 242" stroke="#2e3440" stroke-width="9" stroke-linecap="round"/>
+  <rect x="91" y="239" width="24" height="34" rx="3" fill="#a7b0c0"/>
+  <text x="151" y="324" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" fill="#5f6b7a">optional mask</text>
+
+  <rect x="32" y="404" width="238" height="42" rx="16" fill="#2f3e5c"/>
+  <path d="M32 430V446H270V430" fill="#2f3e5c"/>
+  <text x="151" y="431" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="700" fill="#ffffff">Search image</text>
+  <rect x="57" y="468" width="188" height="132" rx="7" fill="#d8dee9" stroke="#aeb7c6"/>
+  <path d="M57 493H245 M57 525H245 M57 557H245 M93 468V600 M137 468V600 M181 468V600 M221 468V600" stroke="#c0c7d3" stroke-width="3"/>
+  <g transform="translate(171 536) rotate(28)">
+    <rect x="-46" y="-34" width="92" height="68" rx="5" fill="#ffffff" fill-opacity="0.56" stroke="#6c5ce7" stroke-width="3" stroke-dasharray="6 4"/>
+    <rect x="-35" y="-24" width="42" height="10" rx="2" fill="#586174"/>
+    <circle cx="25" cy="15" r="12" fill="#7b879b"/>
+    <path d="M-33 20 L4 1" stroke="#343b49" stroke-width="5" stroke-linecap="round"/>
+  </g>
+  <text x="151" y="628" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" fill="#5f6b7a">larger grayscale frame</text>
+
+  <!-- Feature preparation cards -->
+  <g filter="url(#shadow)">
+    <rect x="316" y="126" width="278" height="216" rx="16" fill="#ffffff" stroke="#b7e4de"/>
+    <rect x="316" y="404" width="278" height="246" rx="16" fill="#ffffff" stroke="#b7e4de"/>
+  </g>
+  <rect x="316" y="126" width="278" height="42" rx="16" fill="#00a896"/>
+  <path d="M316 152V168H594V152" fill="#00a896"/>
+  <text x="455" y="153" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#ffffff">Template preparation</text>
+  <text x="338" y="197" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#172033">1  Blur + Sobel gradients</text>
+  <text x="338" y="226" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#172033">2  Dense orientation field</text>
+  <rect x="338" y="241" width="234" height="43" rx="8" fill="#effaf8"/>
+  <text x="455" y="268" text-anchor="middle" font-family="Georgia,serif" font-size="18" font-style="italic" fill="#087f72">z = (gₓ, gᵧ) / (|∇I| + ε)</text>
+  <text x="338" y="310" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#172033">3  Soft gate · window · mask</text>
+
+  <rect x="316" y="404" width="278" height="42" rx="16" fill="#00a896"/>
+  <path d="M316 430V446H594V430" fill="#00a896"/>
+  <text x="455" y="431" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="#ffffff">Frame preparation</text>
+  <text x="338" y="477" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#172033">1  Blur + Sobel gradients</text>
+  <text x="338" y="506" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="600" fill="#172033">2  Dense orientation field</text>
+  <rect x="338" y="526" width="234" height="85" rx="9" fill="#f1f5fb" stroke="#d9e1ee"/>
+  <g stroke="url(#fieldGradient)" stroke-width="3" stroke-linecap="round">
+    <path d="M360 585l18-30 M395 584l7-34 M430 583l-12-31 M467 585l-27-22 M502 584l-34-5 M537 584l-31 14"/>
+  </g>
+  <g fill="#4c6ef5">
+    <circle cx="378" cy="555" r="3"/><circle cx="402" cy="550" r="3"/><circle cx="418" cy="552" r="3"/><circle cx="440" cy="563" r="3"/><circle cx="468" cy="579" r="3"/><circle cx="506" cy="598" r="3"/>
+  </g>
+  <text x="455" y="633" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" fill="#5f6b7a">two float planes + local energy</text>
+
+  <!-- Input arrows -->
+  <path d="M270 234H305" fill="none" stroke="#748094" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M270 527H305" fill="none" stroke="#748094" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- Coarse stage -->
+  <g filter="url(#shadow)">
+    <rect x="650" y="164" width="306" height="424" rx="18" fill="#ffffff" stroke="#f3bf80" stroke-width="2"/>
+  </g>
+  <rect x="650" y="164" width="306" height="52" rx="18" fill="#f4a261"/>
+  <path d="M650 190V216H956V190" fill="#f4a261"/>
+  <text x="803" y="188" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" font-weight="700" fill="#6b3a00">STAGE 1</text>
+  <text x="803" y="208" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="700" fill="#3d2608">Coarse global search</text>
+  <rect x="679" y="238" width="132" height="112" rx="8" fill="url(#grid)" stroke="#cbd3df"/>
+  <rect x="684" y="243" width="122" height="102" rx="5" fill="url(#heatGradient)" opacity="0.78"/>
+  <circle cx="773" cy="270" r="17" fill="#f77f00" opacity="0.72"/>
+  <circle cx="773" cy="270" r="5" fill="#ffffff" stroke="#a94d00" stroke-width="2"/>
+  <text x="745" y="371" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" fill="#5f6b7a">all valid positions</text>
+  <g transform="translate(848 242)">
+    <rect width="78" height="28" rx="14" fill="#fff3e6" stroke="#f4a261"/>
+    <text x="39" y="19" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" fill="#7a4200">0°</text>
+    <rect y="38" width="78" height="28" rx="14" fill="#fff3e6" stroke="#f4a261"/>
+    <text x="39" y="57" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" fill="#7a4200">3°</text>
+    <rect y="76" width="78" height="28" rx="14" fill="#fff3e6" stroke="#f4a261"/>
+    <text x="39" y="95" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" fill="#7a4200">6°</text>
+    <text x="39" y="128" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="700" fill="#9a5b10">⋮</text>
+  </g>
+  <text x="803" y="406" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="700" fill="#172033">downsampled image (e.g. 0.5×)</text>
+  <text x="803" y="434" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" fill="#5f6b7a">position × coarse rotation bank</text>
+  <rect x="679" y="459" width="248" height="82" rx="10" fill="#fff8ef" stroke="#f5d3a7"/>
+  <text x="803" y="486" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" font-weight="700" fill="#6b3a00">normalized vector correlation</text>
+  <text x="803" y="516" text-anchor="middle" font-family="Georgia,serif" font-size="15" font-style="italic" fill="#6b3a00">Σ(tₓiₓ + tᵧiᵧ) / √(EₜEᵢ)</text>
+  <text x="803" y="568" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" fill="#7d8795">OpenMP: coarse angles evaluated in parallel</text>
+
+  <!-- Merge arrows -->
+  <path d="M594 234H622Q636 234 636 248V292Q636 306 650 306" fill="none" stroke="#748094" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M594 527H622Q636 527 636 513V469Q636 455 650 455" fill="none" stroke="#748094" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- Top K -->
+  <path d="M956 376H982" fill="none" stroke="#748094" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <g filter="url(#shadow)">
+    <rect x="992" y="299" width="130" height="154" rx="16" fill="#ffffff" stroke="#cfd6e2"/>
+  </g>
+  <text x="1057" y="330" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" font-weight="700" fill="#5f6b7a">RETAIN</text>
+  <text x="1057" y="365" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="28" font-weight="800" fill="#2f3e5c">Top K</text>
+  <g font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" text-anchor="middle">
+    <rect x="1012" y="385" width="90" height="20" rx="10" fill="#fff3e6"/><text x="1057" y="399" fill="#7a4200">(x₁, y₁, θ₁)</text>
+    <rect x="1012" y="413" width="90" height="20" rx="10" fill="#fff3e6"/><text x="1057" y="427" fill="#7a4200">(x₂, y₂, θ₂)</text>
+  </g>
+
+  <!-- Fine stage -->
+  <path d="M1122 376H1146" fill="none" stroke="#748094" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <g filter="url(#shadow)">
+    <rect x="1156" y="164" width="252" height="424" rx="18" fill="#ffffff" stroke="#8db5cc" stroke-width="2"/>
+  </g>
+  <rect x="1156" y="164" width="252" height="52" rx="18" fill="#72a8c7"/>
+  <path d="M1156 190V216H1408V190" fill="#72a8c7"/>
+  <text x="1282" y="188" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" font-weight="700" fill="#173b50">STAGE 2</text>
+  <text x="1282" y="208" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="19" font-weight="700" fill="#102e40">Full-resolution refine</text>
+  <rect x="1190" y="244" width="184" height="142" rx="9" fill="url(#grid)" stroke="#9fb4c4"/>
+  <rect x="1230" y="274" width="104" height="82" rx="5" fill="#dbeef7" stroke="#457b9d" stroke-width="2" stroke-dasharray="6 4"/>
+  <circle cx="1291" cy="318" r="16" fill="#457b9d" opacity="0.28"/>
+  <circle cx="1291" cy="318" r="5" fill="#ffffff" stroke="#245672" stroke-width="2"/>
+  <text x="1282" y="411" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" font-weight="700" fill="#172033">local position ROI</text>
+  <text x="1282" y="438" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="14" fill="#5f6b7a">neighboring fine angles</text>
+  <g transform="translate(1180 463)" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" text-anchor="middle">
+    <rect width="42" height="27" rx="13" fill="#edf6fb" stroke="#72a8c7"/><text x="21" y="18" fill="#245672">−1°</text>
+    <rect x="50" width="42" height="27" rx="13" fill="#d9eef8" stroke="#457b9d" stroke-width="2"/><text x="71" y="18" fill="#173b50">0°</text>
+    <rect x="100" width="42" height="27" rx="13" fill="#edf6fb" stroke="#72a8c7"/><text x="121" y="18" fill="#245672">+1°</text>
+    <text x="166" y="18" fill="#5f6b7a">…</text>
+  </g>
+  <text x="1282" y="537" text-anchor="middle" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" fill="#5f6b7a">highest fine score wins</text>
+
+  <!-- Output -->
+  <path d="M1282 588V611" fill="none" stroke="#748094" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <g filter="url(#shadow)">
+    <rect x="975" y="624" width="433" height="90" rx="18" fill="#e9f7ef" stroke="#56a878" stroke-width="2"/>
+  </g>
+  <circle cx="1017" cy="669" r="23" fill="#18864b"/>
+  <path d="M1005 669l8 8 17-20" fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="1056" y="657" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" font-weight="700" fill="#31704b">BEST POSE</text>
+  <text x="1056" y="686" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="20" font-weight="700" fill="#145c35">center (x, y) · angle θ · score</text>
+
+  <text x="32" y="738" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" fill="#7d8795">Schematic — fixed scale; discrete pose search; single best match</text>
+</svg>

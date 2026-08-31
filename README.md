@@ -24,6 +24,14 @@ and normalized, non-centered correlation between the two vector-field components
 It searches all positions and coarse angles in a downsampled image, retains the best
 angle candidates, and refines their positions and neighboring angles at full resolution.
 
+## Overview
+
+![OrientMatch processing pipeline](./figs/pipeline.svg)
+
+The rotated template-field bank is prepared once. For each input frame, OrientMatch runs
+a global search at reduced resolution followed by local refinement at full resolution.
+The diagram is schematic and reflects the current fixed-scale, single-best-match scope.
+
 ## Positioning
 
 OrientMatch is an early reference-library release. It makes **no claim of a novel
@@ -165,6 +173,12 @@ target_link_libraries(my_program PRIVATE OrientMatch::orient_match)
 5. Keep the best `refine_top_k` coarse-angle candidates.
 6. At full resolution, search a local position ROI and neighboring fine angles.
 7. Return the highest normalized vector-field correlation.
+
+![Coarse-to-fine position and rotation search](./figs/coarse-to-fine.svg)
+
+The coarse stage covers all positions and coarse angles. The fine stage concentrates work
+around the top `K` poses. This is a speed-oriented heuristic and does not guarantee that a
+narrow global optimum survives the coarse stage.
 
 Template construction precomputes the coarse rotated-template bank, making a `Matcher`
 suitable for repeated use on multiple frames. The object is immutable after construction;
