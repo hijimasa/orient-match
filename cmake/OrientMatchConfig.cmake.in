@@ -1,7 +1,7 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
-find_dependency(OpenCV COMPONENTS core imgproc imgcodecs)
+find_dependency(OpenCV COMPONENTS core imgproc)
 if(@OpenMP_CXX_FOUND@)
     find_dependency(OpenMP)
 endif()

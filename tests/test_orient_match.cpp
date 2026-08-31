@@ -5,9 +5,11 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <future>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <opencv2/imgproc.hpp>
 
@@ -29,6 +31,12 @@ void expect(bool condition, const std::string &message) {
 double angleError(double left, double right) {
     double difference = std::fmod(std::abs(left - right), 360.0);
     return std::min(difference, 360.0 - difference);
+}
+
+bool sameResult(const orient_match::MatchResult &left,
+                const orient_match::MatchResult &right) {
+    return left.status == right.status && left.center == right.center &&
+           left.angle_deg == right.angle_deg && left.score == right.score;
 }
 
 cv::Mat makeTemplate() {
@@ -105,6 +113,8 @@ void maskRegression() {
                "masked-template angle should be accurate");
         expect(cv::norm(result.center - center) <= 1.1,
                "masked-template center should be accurate");
+        expect(result.score >= -1.0001 && result.score <= 1.0001,
+               "masked-template score should remain normalized");
     }
 }
 
@@ -152,6 +162,43 @@ void statusAndValidationRegression() {
     }
     expect(threw, "flat template with no gradient energy should be rejected");
 
+    threw = false;
+    try {
+        orient_match::MatcherOptions options = testOptions();
+        options.coarse_scale = 0.001;
+        const orient_match::Matcher invalid_matcher(templ, options);
+        (void)invalid_matcher;
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    expect(threw, "coarse scale that produces a sub-3x3 canvas should be rejected");
+
+    threw = false;
+    try {
+        orient_match::MatcherOptions options = testOptions();
+        options.coarse_angle_step_deg = 1e-12;
+        options.fine_angle_step_deg = 1e-12;
+        const orient_match::Matcher invalid_matcher(templ, options);
+        (void)invalid_matcher;
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    expect(threw, "an excessive angle bank should be rejected before allocation");
+
+    threw = false;
+    try {
+        orient_match::MatcherOptions options = testOptions();
+        options.angle_start_deg = 1e16;
+        options.angle_extent_deg = 10.0;
+        options.coarse_angle_step_deg = 1.0;
+        options.fine_angle_step_deg = 1.0;
+        const orient_match::Matcher invalid_matcher(templ, options);
+        (void)invalid_matcher;
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    expect(threw, "unrepresentable angle increments should be rejected");
+
     const cv::Mat field = orient_match::orientationField(templ);
     expect(field.type() == CV_32FC2 && field.size() == templ.size(),
            "orientationField should return CV_32FC2 at the input size");
@@ -171,9 +218,36 @@ void determinismRegression() {
     omp_set_num_threads(std::max(1, saved_threads));
 #endif
     const auto second = matcher.match(image);
-    expect(first.status == second.status && first.center == second.center &&
-               first.angle_deg == second.angle_deg && first.score == second.score,
+    expect(sameResult(first, second),
            "result should be deterministic across repeated/thread-count runs");
+}
+
+void concurrentMatchRegression() {
+    const cv::Mat templ = makeTemplate();
+    const orient_match::Matcher matcher(templ, testOptions());
+    const std::vector<cv::Mat> images = {
+        placeTemplate(templ, cv::Size(240, 200), {119.5, 99.5}, 17.0),
+        placeTemplate(templ, cv::Size(240, 200), {143.5, 76.5}, 91.0),
+        placeTemplate(templ, cv::Size(240, 200), {82.5, 126.5}, 237.0),
+    };
+
+    std::vector<orient_match::MatchResult> expected;
+    expected.reserve(images.size());
+    for (const cv::Mat &image : images) {
+        expected.push_back(matcher.match(image));
+    }
+
+    std::vector<std::future<orient_match::MatchResult>> futures;
+    futures.reserve(images.size());
+    for (std::size_t i = 0; i < images.size(); ++i) {
+        futures.push_back(std::async(std::launch::async, [&matcher, &images, i] {
+            return matcher.match(images[i]);
+        }));
+    }
+    for (std::size_t i = 0; i < futures.size(); ++i) {
+        expect(sameResult(expected[i], futures[i].get()),
+               "concurrent match should equal the sequential result");
+    }
 }
 
 }  // namespace
@@ -185,6 +259,7 @@ int main() {
         partialAngleRangeRegression();
         statusAndValidationRegression();
         determinismRegression();
+        concurrentMatchRegression();
     } catch (const std::exception &error) {
         std::cerr << "Unexpected exception: " << error.what() << '\n';
         return 1;

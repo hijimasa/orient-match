@@ -15,6 +15,9 @@ namespace {
 
 constexpr double kPi = 3.141592653589793238462643383279502884;
 constexpr float kInvalidScore = -2.0F;
+constexpr std::size_t kMaxCoarseAngleCandidates = 4096;
+constexpr std::size_t kMaxFineAngleOffsets = 4097;
+constexpr std::size_t kMaxFineTasks = 1000000;
 
 struct OrientationCanvas {
     cv::Mat x;
@@ -84,6 +87,21 @@ void validateOptions(const MatcherOptions &o) {
     }
     if (o.refine_top_k < 1) {
         throw std::invalid_argument("refine_top_k must be >= 1");
+    }
+    if (!finite(o.angle_start_deg + o.angle_extent_deg) ||
+        o.angle_start_deg + o.angle_extent_deg <= o.angle_start_deg) {
+        throw std::invalid_argument(
+            "angle range is not representable; use a smaller angle_start_deg");
+    }
+    if (o.coarse_angle_step_deg < o.angle_extent_deg &&
+        o.angle_start_deg + o.coarse_angle_step_deg <= o.angle_start_deg) {
+        throw std::invalid_argument(
+            "coarse_angle_step_deg is too small relative to angle_start_deg");
+    }
+    if (!finite(o.angle_start_deg + o.fine_angle_step_deg) ||
+        o.angle_start_deg + o.fine_angle_step_deg <= o.angle_start_deg) {
+        throw std::invalid_argument(
+            "fine_angle_step_deg is too small relative to angle_start_deg");
     }
 }
 
@@ -162,7 +180,11 @@ OrientationCanvas makeCanvas(const cv::Mat &template_image, const cv::Mat &templ
 }
 
 OrientationCanvas resizeCanvas(const OrientationCanvas &source, double scale) {
-    const int size = std::max(3, static_cast<int>(std::lround(source.size * scale)));
+    const int size = static_cast<int>(std::lround(source.size * scale));
+    if (size < 3) {
+        throw std::invalid_argument(
+            "coarse_scale is too small; the template canvas must remain at least 3x3");
+    }
     OrientationCanvas result;
     result.size = size;
     cv::resize(source.x, result.x, cv::Size(size, size), 0.0, 0.0, cv::INTER_AREA);
@@ -183,8 +205,16 @@ RotatedTemplate rotateCanvas(const OrientationCanvas &source, double angle_deg) 
                    cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0.0F));
     cv::warpAffine(source.y, warped_y, transform, cv::Size(source.size, source.size),
                    cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0.0F));
-    cv::warpAffine(source.mask, result.mask, transform, cv::Size(source.size, source.size),
+    cv::Mat warped_mask;
+    cv::warpAffine(source.mask, warped_mask, transform, cv::Size(source.size, source.size),
                    cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0.0F));
+
+    // The template planes already contain the interpolated mask amplitude. For cosine
+    // normalization, image energy must instead be measured on a geometric support: using
+    // the fractional amplitude here can violate Cauchy-Schwarz and produce scores > 1.
+    cv::Mat support;
+    cv::compare(warped_mask, 0.0F, support, cv::CMP_GT);
+    support.convertTo(result.mask, CV_32F, 1.0 / 255.0);
 
     // OpenCV image coordinates have y pointing down. Rotating the sample positions
     // therefore rotates the orientation vector values by the negative mathematical angle.
@@ -252,17 +282,59 @@ cv::Rect refinementRoi(const cv::Mat &image, double center_x, double center_y,
     return {x, y, width, height};
 }
 
+std::vector<double> coarseAngles(const MatcherOptions &options) {
+    const long double start = options.angle_start_deg;
+    const long double end = start + static_cast<long double>(options.angle_extent_deg);
+    const long double step = options.coarse_angle_step_deg;
+    std::vector<double> angles;
+    for (std::size_t i = 0; i <= kMaxCoarseAngleCandidates; ++i) {
+        const long double candidate = start + static_cast<long double>(i) * step;
+        if (candidate >= end) {
+            return angles;
+        }
+        if (angles.size() == kMaxCoarseAngleCandidates) {
+            break;
+        }
+        const double angle = static_cast<double>(candidate);
+        if (!std::isfinite(angle) || (!angles.empty() && angle <= angles.back())) {
+            throw std::invalid_argument(
+                "coarse angle samples are not representable with double precision");
+        }
+        angles.push_back(angle);
+    }
+    throw std::invalid_argument("angle range contains more than 4096 coarse samples");
+}
+
 std::vector<double> fineOffsets(double radius, double step) {
-    std::vector<double> offsets;
-    for (double value = -radius; value <= radius + 1e-9; value += step) {
+    const long double ratio = static_cast<long double>(radius) / step;
+    constexpr std::size_t kMaxRings = (kMaxFineAngleOffsets - 1) / 2;
+    if (!std::isfinite(ratio) || ratio > static_cast<long double>(kMaxRings)) {
+        throw std::invalid_argument("fine angle range contains more than 4097 samples");
+    }
+
+    const std::size_t rings = static_cast<std::size_t>(std::floor(ratio));
+    const double tolerance =
+        8.0 * std::numeric_limits<double>::epsilon() * std::max(1.0, radius);
+    std::vector<double> offsets{0.0};
+    offsets.reserve(std::min(kMaxFineAngleOffsets, 2 * rings + 3));
+    bool has_radius = false;
+    for (std::size_t i = 1; i <= rings; ++i) {
+        double value = static_cast<double>(static_cast<long double>(i) * step);
+        if (std::abs(value - radius) <= tolerance) {
+            value = radius;
+            has_radius = true;
+        }
+        offsets.push_back(-value);
         offsets.push_back(value);
     }
-    offsets.push_back(0.0);
+    if (!has_radius) {
+        offsets.push_back(-radius);
+        offsets.push_back(radius);
+    }
+    if (offsets.size() > kMaxFineAngleOffsets) {
+        throw std::invalid_argument("fine angle range contains more than 4097 samples");
+    }
     std::sort(offsets.begin(), offsets.end());
-    offsets.erase(std::unique(offsets.begin(), offsets.end(), [](double left, double right) {
-                      return std::abs(left - right) < 1e-9;
-                  }),
-                  offsets.end());
     return offsets;
 }
 
@@ -325,16 +397,18 @@ public:
             throw std::invalid_argument("template_image has no usable gradient energy");
         }
         coarse = resizeCanvas(full, options.coarse_scale);
-
-        const double end = options.angle_start_deg + options.angle_extent_deg;
-        for (double angle = options.angle_start_deg; angle < end - 1e-9;
-             angle += options.coarse_angle_step_deg) {
-            coarse_angles.push_back(angle);
-            coarse_templates.push_back(rotateCanvas(coarse, angle));
+        coarse_angles = coarseAngles(options);
+        fine_offsets = fineOffsets(options.coarse_angle_step_deg,
+                                   options.fine_angle_step_deg);
+        const std::size_t refined_candidates = std::min(
+            coarse_angles.size(), static_cast<std::size_t>(options.refine_top_k));
+        if (refined_candidates > kMaxFineTasks / fine_offsets.size()) {
+            throw std::invalid_argument("angle options produce more than 1000000 fine tasks");
         }
-        if (coarse_angles.empty()) {
-            coarse_angles.push_back(options.angle_start_deg);
-            coarse_templates.push_back(rotateCanvas(coarse, options.angle_start_deg));
+
+        coarse_templates.reserve(coarse_angles.size());
+        for (double angle : coarse_angles) {
+            coarse_templates.push_back(rotateCanvas(coarse, angle));
         }
     }
 
@@ -344,6 +418,7 @@ public:
     OrientationCanvas coarse;
     std::vector<double> coarse_angles;
     std::vector<RotatedTemplate> coarse_templates;
+    std::vector<double> fine_offsets;
 };
 
 Matcher::Matcher(const cv::Mat &template_image, const MatcherOptions &options)
@@ -404,17 +479,15 @@ MatchResult Matcher::match(const cv::Mat &image) const {
         double angle = 0.0;
     };
     std::vector<FineTask> tasks;
-    const auto offsets = fineOffsets(impl_->options.coarse_angle_step_deg,
-                                     impl_->options.fine_angle_step_deg);
-    const bool full_circle = std::abs(impl_->options.angle_extent_deg - 360.0) < 1e-9;
+    const bool full_circle = impl_->options.angle_extent_deg == 360.0;
     const double range_end =
         impl_->options.angle_start_deg + impl_->options.angle_extent_deg;
     for (std::size_t i = 0; i < candidates.size(); ++i) {
         const double base = impl_->coarse_angles[candidates[i]];
-        for (double offset : offsets) {
+        for (double offset : impl_->fine_offsets) {
             const double angle = base + offset;
             if (!full_circle &&
-                (angle < impl_->options.angle_start_deg - 1e-9 || angle >= range_end - 1e-9)) {
+                (angle < impl_->options.angle_start_deg || angle >= range_end)) {
                 continue;
             }
             tasks.push_back({i, angle});

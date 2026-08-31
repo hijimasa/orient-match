@@ -79,7 +79,7 @@ rather than assuming one method is universally faster or more accurate.
 
 - CMake 3.16 or newer
 - a C++17 compiler
-- OpenCV (`core`, `imgproc`, and `imgcodecs`)
+- OpenCV (`core` and `imgproc`; `imgcodecs` is needed only for the example CLI)
 - OpenMP (optional)
 
 ## Build and test
@@ -132,7 +132,9 @@ orient_match::Matcher matcher(templ, mask, options);
 ```
 
 Mask pixels equal to zero are excluded. Gradients are computed before masking so the mask
-boundary does not create a synthetic template edge.
+boundary does not create a synthetic template edge. After rotation, the interpolated mask
+is converted back to a binary support before energy normalization; this keeps the cosine
+score bounded despite interpolation at the mask boundary.
 
 ### CMake consumer
 
@@ -174,6 +176,10 @@ suitable for repeated use on multiple frames. The object is immutable after cons
 - Only the single best match is returned; there is no NMS or multi-instance output yet.
 - Position and angle are discrete. There is no subpixel/sub-degree peak interpolation yet.
 - Coarse-to-fine search is heuristic and can miss a narrow global optimum.
+- Excessively fine angle grids are rejected instead of allocating an unbounded template
+  bank; the current limits are 4,096 coarse angles, 4,097 fine offsets, and 1,000,000 fine
+  tasks per match.
+- `coarse_scale` must leave the square template canvas at least 3 x 3 pixels.
 - The correlation score is not a calibrated probability or universal detection threshold.
 - A square rotation canvas must fit entirely inside the search image.
 - The current implementation rotates full-resolution templates during refinement; very

@@ -11,7 +11,11 @@ include(CMakePackageConfigHelpers)
 
 option(ORIENT_MATCH_BUILD_EXAMPLES "Build OrientMatch examples" ON)
 
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
+set(_orient_match_opencv_components core imgproc)
+if(ORIENT_MATCH_BUILD_EXAMPLES)
+    list(APPEND _orient_match_opencv_components imgcodecs)
+endif()
+find_package(OpenCV REQUIRED COMPONENTS ${_orient_match_opencv_components})
 find_package(OpenMP QUIET)
 
 add_library(orient_match STATIC src/orient_match.cpp)
@@ -21,7 +25,7 @@ target_include_directories(orient_match
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_link_libraries(orient_match PUBLIC ${OpenCV_LIBS})
+target_link_libraries(orient_match PUBLIC opencv_core opencv_imgproc)
 if(OpenMP_CXX_FOUND)
     target_link_libraries(orient_match PUBLIC OpenMP::OpenMP_CXX)
 endif()
@@ -33,12 +37,13 @@ set_target_properties(orient_match PROPERTIES
 
 if(ORIENT_MATCH_BUILD_EXAMPLES)
     add_executable(orient_match_cli examples/orient_match_cli.cpp)
-    target_link_libraries(orient_match_cli PRIVATE OrientMatch::orient_match)
+    target_link_libraries(orient_match_cli PRIVATE OrientMatch::orient_match opencv_imgcodecs)
 endif()
 
 if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
     add_executable(orient_match_tests tests/test_orient_match.cpp)
-    target_link_libraries(orient_match_tests PRIVATE OrientMatch::orient_match)
+    target_link_libraries(orient_match_tests PRIVATE OrientMatch::orient_match Threads::Threads)
     add_test(NAME orient_match_tests COMMAND orient_match_tests)
     set_tests_properties(orient_match_tests PROPERTIES TIMEOUT 120)
 endif()

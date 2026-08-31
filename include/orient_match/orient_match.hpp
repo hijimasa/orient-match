@@ -16,7 +16,9 @@ struct MatcherOptions {
     // Gaussian window applied to the template orientation field. Set to 0 to disable.
     double window_sigma = 1.0;
 
-    // Coarse image level and pose search.
+    // Coarse image level and pose search. Configurations producing more than
+    // 4096 coarse angles, 4097 fine offsets, or 1,000,000 fine tasks are rejected.
+    // The scaled template rotation canvas must remain at least 3x3 pixels.
     double coarse_scale = 0.5;
     double angle_start_deg = 0.0;
     double angle_extent_deg = 360.0;  // Half-open range [start, start + extent).
