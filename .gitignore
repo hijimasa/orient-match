@@ -4,3 +4,4 @@
 /compile_commands.json
 *.swp
 *~
+__pycache__/

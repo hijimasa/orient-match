@@ -24,13 +24,23 @@ and normalized, non-centered correlation between the two vector-field components
 It searches all positions and coarse angles in a downsampled image, retains the best
 angle candidates, and refines their positions and neighboring angles at full resolution.
 
+## What is compared
+
+![What OrientMatch compares: orientation fields, rotated vectors, and the dot-product score](./figs/principle.svg)
+
+Every pixel becomes a gradient-direction vector of near-unit length, so a pose is scored on
+shape rather than on brightness or contrast. Rotating the template rotates the sampling grid
+*and* the vector values; rotating positions only would scale every dot product by `cos θ`.
+The score of one pose is the energy-normalized sum of those dot products.
+
 ## Overview
 
 ![OrientMatch processing pipeline](./figs/pipeline.svg)
 
-The rotated template-field bank is prepared once. For each input frame, OrientMatch runs
-a global search at reduced resolution followed by local refinement at full resolution.
-The diagram is schematic and reflects the current fixed-scale, single-best-match scope.
+The template field, its square rotation canvas, and the coarse rotated bank are built once,
+when the `Matcher` is constructed. Each frame is then converted to an orientation field,
+searched globally at reduced resolution, and refined locally at full resolution. The diagram
+is schematic and reflects the current fixed-scale, single-best-match scope.
 
 ## Positioning
 
@@ -176,9 +186,13 @@ target_link_libraries(my_program PRIVATE OrientMatch::orient_match)
 
 ![Coarse-to-fine position and rotation search](./figs/coarse-to-fine.svg)
 
-The coarse stage covers all positions and coarse angles. The fine stage concentrates work
-around the top `K` poses. This is a speed-oriented heuristic and does not guarantee that a
-narrow global optimum survives the coarse stage.
+The score is a volume over `(x, y, θ)`. The coarse stage samples all of it on a downsampled
+image, and the fine stage looks closely only around the top `K` poses, which costs a small
+fraction of a full-resolution exhaustive search. This is a speed-oriented heuristic and does
+not guarantee that a narrow global optimum survives the coarse stage.
+
+All three figures are generated from a run of the algorithm on a synthetic scene; the
+scripts live in [`tools/figures`](./tools/figures).
 
 Template construction precomputes the coarse rotated-template bank, making a `Matcher`
 suitable for repeated use on multiple frames. The object is immutable after construction;
