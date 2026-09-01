@@ -8,6 +8,8 @@ from svgutil import *
 
 D = coarse_to_fine()
 maps, angles, peaks, fine = D["maps"], D["angles"], D["peaks"], D["fine"]
+scanned, order, bases = D["scanned"], D["order"], D["bases"]
+LEAD = int(bases[0])
 img, tmpl, ANG, _, (cx, cy, mask, size) = scene()
 tfx, tfy = orientation_field(tmpl)
 ix, iy, en = image_planes(img)
@@ -20,7 +22,8 @@ W, H = 1380, 690
 g = Svg(W, H, "OrientMatch pipeline",
         "Building a Matcher precomputes the template orientation field, its square rotation canvas "
         "and a bank of coarse rotated copies. Each frame is converted to an orientation field, "
-        "searched coarsely, and the best hypotheses are refined at full resolution.")
+        "scanned globally at a sparse set of angles, and the best separated places are then refined "
+        "locally - first over the skipped angles, then at full resolution.")
 g.text(W/2, 48, "OrientMatch pipeline", 28, INK, "700", "middle")
 g.text(W/2, 76, "what is paid for once, and what happens on every frame", 15, MUTED, "400", "middle")
 
@@ -71,7 +74,7 @@ for k, a in enumerate((0.0, 24.0, 48.0)):
     ox, oy = XS[3]+40+k*22, ya+56+k*16
     g.rect(ox, oy, 96, 96, rx=6, fill="#fffaf3", stroke="#efc79a")
     g.add(part_group(ox+48, oy+48, 96/float(size), a, fill_dark="#dda15e", fill_light="#f6e2c8"))
-g.text(XS[3]+123, ya+192, "120 angles at 0.5× — reused for every frame", 10.5, MUTED, "400", "middle")
+g.text(XS[3]+123, ya+192, f"{len(angles)} angles at 0.5× — reused for every frame", 10.5, MUTED, "400", "middle")
 
 # ------------------------------------------------------------------ lane B
 yb = 386
@@ -99,25 +102,25 @@ field_arrows(g, ix, iy, XS[1]+26, yb+46, 195/360.0, step=22, color=IMG_C, length
              thresh=0.45, width=1.8, head=5.4)
 g.text(XS[1]+123, yb+190, "two float planes + local energy", 10.5, MUTED, "400", "middle")
 
-box(XS[2], yb, BW, BH, 7, "coarse search", ORANGE)
-cmap = cv2.resize(maps[57.0], None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+box(XS[2], yb, BW, BH, 7, "global scan", ORANGE)
+cmap = cv2.resize(maps[angles[LEAD]], None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
 mh, mw = cmap.shape
 c2 = 200.0/mw
 heat_rects(g, cmap, XS[2]+23, yb+52, c2, HEAT, lo=0.16, hi=float(peaks[:,0].max()), levels=14)
 g.rect(XS[2]+23, yb+52, mw*c2, mh*c2, rx=4, fill="none", stroke="#e6c39a")
-r_, c_ = peaks[19,1]*0.5, peaks[19,2]*0.5
+r_, c_ = peaks[LEAD,1]*0.5, peaks[LEAD,2]*0.5
 g.add(f'<circle cx="{XS[2]+23+(c_+0.5)*c2:.1f}" cy="{yb+52+(r_+0.5)*c2:.1f}" r="6" fill="none" '
       f'stroke="#7a3d00" stroke-width="2"/>')
-g.text(XS[2]+123, yb+190, "all positions × 120 angles, 0.5× image", 10.5, MUTED, "400", "middle")
+g.text(XS[2]+123, yb+190, f"all positions × {len(scanned)} of {len(angles)} angles, 0.5× image", 10.5, MUTED, "400", "middle")
 
-box(XS[3], yb, BW, BH, 8, "refine top K", BLUE)
+box(XS[3], yb, BW, BH, 8, "refine candidates", BLUE)
 fs = fine[(0,-2)][1]
 fc = 108.0/fs.shape[1]
 heat_rects(g, fs, XS[3]+22, yb+58, fc, COOL, levels=14)
 g.rect(XS[3]+22, yb+58, 108, 108, rx=4, fill="none", stroke="#9fb4c4")
-g.text(XS[3]+140, yb+80, "K = 5 poses", 11.5, "#20516e", "700")
-g.text(XS[3]+140, yb+100, "±7 px window", 11.5, MUTED)
-g.text(XS[3]+140, yb+120, "±3° at 1° steps", 11.5, MUTED)
+g.text(XS[3]+140, yb+80, "K = 5 places", 11.5, "#20516e", "700")
+g.text(XS[3]+140, yb+100, "skipped angles", 11.5, MUTED)
+g.text(XS[3]+140, yb+120, "±7 px, ±3° at 1°", 11.5, MUTED)
 g.text(XS[3]+140, yb+140, "full resolution", 11.5, MUTED)
 g.text(XS[3]+123, yb+190, "highest fine score wins", 10.5, MUTED, "400", "middle")
 
@@ -143,11 +146,11 @@ g.add(f'<path d="M{XS[2]+BW/2} {gapy0} L{XS[3]+BW/2} {gapy1}" fill="none" stroke
 arrow(g, XS[3]+BW/2-8, gapy1-11, XS[3]+BW/2, gapy1, BLUE, 2.2, 9)
 lx, ly = 210, ya+BH+30
 g.add(f'<path d="M{lx} {ly-4} h26" stroke="{ORANGE}" stroke-width="2.2" stroke-dasharray="7 5"/>')
-g.text(lx+34, ly, "the precomputed 0.5× bank is what the coarse search slides", 12, "#a2621f", "600")
+g.text(lx+34, ly, "the precomputed 0.5× bank is what both 0.5× stages slide", 12, "#a2621f", "600")
 g.add(f'<path d="M{lx} {ly+22} h26" stroke="{BLUE}" stroke-width="2.2" stroke-dasharray="7 5"/>')
 g.text(lx+34, ly+26, "the full-resolution canvas is rotated on demand, one fine angle at a time",
        12, "#2b6285", "600")
 
-g.text(40, H-18, "OpenMP, when available, evaluates coarse angles and fine tasks in parallel. "
-       "Fixed scale, one best match per frame.", 12, "#8b95a5")
+g.text(40, H-18, "Each stage transforms its image window once, then correlates every angle "
+       "against it. Fixed scale, one best match per frame.", 12, "#8b95a5")
 write(g, "pipeline.svg")

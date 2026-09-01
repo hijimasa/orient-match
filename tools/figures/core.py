@@ -45,12 +45,17 @@ def rotate_canvas(cx, cy, mask, size, angle_deg, rotate_values=True):
         wx, wy = wx * co - wy * si, wx * si + wy * co
     return wx, wy, support
 
+ENERGY_FLOOR_RATIO = 1e-6
+
 def score_map(ix, iy, energy, tx, ty, support):
     nx = cv2.matchTemplate(ix, tx, cv2.TM_CCORR)
     ny = cv2.matchTemplate(iy, ty, cv2.TM_CCORR)
     ie = cv2.matchTemplate(energy, support, cv2.TM_CCORR)
     te = max(float((tx * tx).sum() + (ty * ty).sum()), 1e-12)
-    den = np.sqrt(np.maximum(ie, 1e-12) * te)
+    # The support area is the largest energy a position can hold; anything far below it
+    # is textureless, and dividing by it would amplify round-off. See kEnergyFloorRatio.
+    floor = max(ENERGY_FLOOR_RATIO * float(support.sum()), 1e-12)
+    den = np.sqrt(np.maximum(ie, floor) * te)
     s = (nx + ny) / den
     s[~np.isfinite(s)] = -1.0
     s[(s < -1.001) | (s > 1.001)] = -1.0
