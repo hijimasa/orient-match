@@ -10,10 +10,14 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 option(ORIENT_MATCH_BUILD_EXAMPLES "Build OrientMatch examples" ON)
+option(ORIENT_MATCH_BUILD_BENCHMARKS "Build the comparison against other matchers" OFF)
 
 set(_orient_match_opencv_components core imgproc)
-if(ORIENT_MATCH_BUILD_EXAMPLES)
+if(ORIENT_MATCH_BUILD_EXAMPLES OR ORIENT_MATCH_BUILD_BENCHMARKS)
     list(APPEND _orient_match_opencv_components imgcodecs)
+endif()
+if(ORIENT_MATCH_BUILD_BENCHMARKS)
+    list(APPEND _orient_match_opencv_components features2d calib3d)
 endif()
 find_package(OpenCV REQUIRED COMPONENTS ${_orient_match_opencv_components})
 find_package(OpenMP QUIET)
@@ -38,6 +42,13 @@ set_target_properties(orient_match PROPERTIES
 if(ORIENT_MATCH_BUILD_EXAMPLES)
     add_executable(orient_match_cli examples/orient_match_cli.cpp)
     target_link_libraries(orient_match_cli PRIVATE OrientMatch::orient_match opencv_imgcodecs)
+endif()
+
+if(ORIENT_MATCH_BUILD_BENCHMARKS)
+    add_executable(orient_match_compare benchmarks/compare_methods.cpp)
+    target_include_directories(orient_match_compare PRIVATE benchmarks)
+    target_link_libraries(orient_match_compare
+        PRIVATE OrientMatch::orient_match opencv_imgcodecs opencv_features2d opencv_calib3d)
 endif()
 
 if(BUILD_TESTING)
