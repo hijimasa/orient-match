@@ -10,7 +10,7 @@ It is intended as a transparent, reproducible baseline for the following setting
 
 - one grayscale template;
 - known, fixed scale;
-- one best match in a larger grayscale image;
+- one or more instances of it in a larger grayscale image;
 - translation and in-plane rotation;
 - CPU execution, optionally parallelized with OpenMP.
 
@@ -44,7 +44,7 @@ scanned globally at reduced resolution over a sparse set of angles, and refined 
 first over the angles the scan stepped across, then at full resolution. Because every stage
 correlates many angles against one image window, that window is transformed once and reused
 across them, which is where most of the per-frame cost used to go. The diagram is schematic
-and reflects the current fixed-scale, single-best-match scope.
+and reflects the current fixed-scale scope.
 
 ## Positioning
 
