@@ -262,6 +262,45 @@ saves a little over 40% of the frame time; `coarse_gate_ratio` controls how eage
 so, and its default leaves a margin against the lowest coarse-to-final score ratio measured
 on the reference scenes.
 
+### Finding more than one instance
+
+`match()` reports the best pose. `matchAll()` reports every distinct place it examined,
+best first:
+
+```cpp
+options.min_score = 0.6;      // set this before relying on the length of the list
+options.refine_top_k = 8;     // also the largest number of matches that can come back
+orient_match::Matcher matcher(templ, options);
+
+for (const orient_match::MatchResult &m : matcher.matchAll(image)) {
+    std::cout << m.center << " " << m.angle_deg << " deg, score=" << m.score << "\n";
+}
+```
+
+`refine_top_k` is the search budget and therefore also the cap on the number of matches:
+raising it examines, and can report, more places, at proportional cost. Two knobs control
+what counts as a separate place:
+
+- `candidate_separation` -- how far apart two candidates must be at the coarse level, as a
+  fraction of the rotation canvas. This is what keeps the budget on distinct places instead
+  of on several angles of one, and it is a hard floor: instances closer than this are
+  reported as one, whatever the overlap setting says.
+- `max_overlap` -- a refined pose is dropped when its template rectangle overlaps a better
+  one by more than this, as intersection over union. Unlike the separation above, this is
+  measured on the template's own rectangle at its detected angle rather than on the square
+  canvas, so a long thin template is not suppressed over the area it does not occupy.
+
+`matchAll()` returns an empty list when nothing reaches `min_score`; `match()` is the form
+that reports why. With `min_score` left at its default nothing is rejected on score, so the
+list always runs to `refine_top_k` entries and its tail is noise.
+
+In practice `max_overlap` earns its keep on duplicate detections of one object rather than
+on genuinely overlapping instances. Two copies of the same template that overlap enough for
+the setting to matter also corrupt each other's orientation evidence: in a test scene, two
+instances 84 pixels apart (a 12% overlap of a 96-pixel-wide template) both scored well and
+were both reported, while at 70 pixels apart the occluded one fell from 0.74 to 0.32 and
+was no longer a detection at all.
+
 An optional single-channel template mask is supported:
 
 ```cpp
@@ -308,7 +347,8 @@ target_link_libraries(my_program PRIVATE OrientMatch::orient_match)
 7. At full resolution, search a local position ROI and the neighboring fine angles; search
    the leading candidate one ring wider, because the coarse level can be a step or two off
    the full-resolution optimum.
-8. Return the highest normalized vector-field correlation, subject to `min_score`.
+8. Keep the best pose at each place. `match()` returns the highest, `matchAll()` returns
+   them all, both subject to `min_score`.
 
 ![Coarse-to-fine position and rotation search](./figs/coarse-to-fine.svg)
 
@@ -330,8 +370,9 @@ suitable for repeated use on multiple frames. The object is immutable after cons
 ## Scope and known limitations
 
 - Scale is assumed known. A scale mismatch is not searched.
-- Only the single best match is returned. Candidates are separated internally so that the
-  refinement budget covers distinct places, but there is no multi-instance output yet.
+- Multiple instances are reported by `matchAll()`, but how close two of them may stand is
+  limited by `candidate_separation` at the coarse level, and in practice by the score:
+  instances that overlap substantially degrade each other's evidence.
 - Position and angle are discrete. There is no subpixel/sub-degree peak interpolation yet.
 - Coarse-to-fine search is heuristic and can miss a narrow global optimum.
 - Excessively fine angle grids are rejected instead of allocating an unbounded template

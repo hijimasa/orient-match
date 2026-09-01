@@ -122,7 +122,7 @@ g.text(XS[3]+140, yb+80, "K = 5 places", 11.5, "#20516e", "700")
 g.text(XS[3]+140, yb+100, "skipped angles", 11.5, MUTED)
 g.text(XS[3]+140, yb+120, "±7 px, ±3° at 1°", 11.5, MUTED)
 g.text(XS[3]+140, yb+140, "full resolution", 11.5, MUTED)
-g.text(XS[3]+123, yb+190, "highest fine score wins", 10.5, MUTED, "400", "middle")
+g.text(XS[3]+123, yb+190, "one pose per place, best first", 10.5, MUTED, "400", "middle")
 
 # top-K chip on the arrow
 g.rect(XS[2]+BW-2, yb+BH/2-34, 44, 22, rx=8, fill="#fff3e6", stroke=ORANGE)
@@ -152,5 +152,5 @@ g.text(lx+34, ly+26, "the full-resolution canvas is rotated on demand, one fine 
        12, "#2b6285", "600")
 
 g.text(40, H-18, "Each stage transforms its image window once, then correlates every angle "
-       "against it. Fixed scale, one best match per frame.", 12, "#8b95a5")
+       "against it. Fixed scale; matchAll() reports every place.", 12, "#8b95a5")
 write(g, "pipeline.svg")
