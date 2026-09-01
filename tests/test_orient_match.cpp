@@ -136,6 +136,122 @@ void partialAngleRangeRegression() {
     }
 }
 
+// A cluttered scene that does not contain the template.
+cv::Mat makeClutter(cv::Size size, int seed) {
+    cv::RNG rng(seed);
+    cv::Mat image(size, CV_8U, cv::Scalar(25));
+    for (int i = 0; i < 25; ++i) {
+        const cv::Point point(rng.uniform(0, size.width), rng.uniform(0, size.height));
+        const cv::Scalar tone(rng.uniform(60, 230));
+        if (i % 3 == 0) {
+            cv::rectangle(image, cv::Rect(point.x, point.y, rng.uniform(6, 40),
+                                          rng.uniform(6, 40)), tone, cv::FILLED);
+        } else if (i % 3 == 1) {
+            cv::circle(image, point, rng.uniform(4, 20), tone, cv::FILLED);
+        } else {
+            cv::line(image, point, point + cv::Point(rng.uniform(-50, 50),
+                                                     rng.uniform(-50, 50)), tone, 2);
+        }
+    }
+    return image;
+}
+
+void absenceRegression() {
+    const cv::Mat templ = makeTemplate();
+
+    // Without min_score the matcher keeps its old contract: always report a best pose.
+    const orient_match::Matcher permissive(templ, testOptions());
+    const cv::Mat empty_scene = makeClutter(cv::Size(240, 200), 7);
+    const auto unfiltered = permissive.match(empty_scene);
+    expect(unfiltered.valid(), "a negative min_score should accept any best pose");
+    expect(unfiltered.score < 0.6,
+           "an absent template should not reach the score of a present one");
+
+    orient_match::MatcherOptions options = testOptions();
+    options.min_score = 0.6;
+    const orient_match::Matcher strict(templ, options);
+
+    const auto rejected = strict.match(empty_scene);
+    expect(rejected.status == orient_match::MatchStatus::below_min_score,
+           "an absent template should be reported as below_min_score");
+    expect(!rejected.valid(), "a rejected result should not be valid()");
+    expect(rejected.coarse_score <= 1.001,
+           "a rejected result should still carry its coarse diagnostics");
+
+    cv::Mat present_scene = empty_scene.clone();
+    const cv::Point2d center(119.5, 99.5);
+    const cv::Point2f source_center((templ.cols - 1) / 2.0F, (templ.rows - 1) / 2.0F);
+    cv::Mat transform = cv::getRotationMatrix2D(source_center, 24.0, 1.0);
+    transform.at<double>(0, 2) += center.x - source_center.x;
+    transform.at<double>(1, 2) += center.y - source_center.y;
+    cv::Mat patch;
+    cv::Mat cover(templ.size(), CV_8U, cv::Scalar(255));
+    cv::Mat covered;
+    cv::warpAffine(templ, patch, transform, empty_scene.size(), cv::INTER_LINEAR,
+                   cv::BORDER_CONSTANT, cv::Scalar(0));
+    cv::warpAffine(cover, covered, transform, empty_scene.size(), cv::INTER_NEAREST,
+                   cv::BORDER_CONSTANT, cv::Scalar(0));
+    patch.copyTo(present_scene, covered);
+
+    const auto accepted = strict.match(present_scene);
+    expect(accepted.valid(), "a present template should pass the same threshold");
+    if (accepted) {
+        expect(cv::norm(accepted.center - center) <= 1.5,
+               "an accepted result should still be accurate");
+        expect(accepted.margin > rejected.margin,
+               "a present template should win its position by a wider margin");
+    }
+
+    bool threw = false;
+    try {
+        orient_match::MatcherOptions bad = testOptions();
+        bad.coarse_gate_ratio = 1.5;
+        const orient_match::Matcher invalid_matcher(templ, bad);
+        (void)invalid_matcher;
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    expect(threw, "coarse_gate_ratio outside [0, 1] should be rejected");
+}
+
+void scanStrideRegression() {
+    const cv::Mat templ = makeTemplate();
+
+    // The sparse global scan is a speed control, not a change of answer: it must land on
+    // the pose an exhaustive scan finds.
+    orient_match::MatcherOptions exhaustive = testOptions();
+    exhaustive.angle_scan_stride = 1;
+    const orient_match::Matcher reference(templ, exhaustive);
+    const orient_match::Matcher automatic(templ, testOptions());
+
+    const struct {
+        cv::Point2d center;
+        double angle;
+    } cases[] = {{{119.5, 99.5}, 8.0}, {{143.5, 76.5}, 154.0}, {{82.5, 126.5}, 291.0}};
+    for (const auto &test_case : cases) {
+        const cv::Mat image =
+            placeTemplate(templ, cv::Size(240, 200), test_case.center, test_case.angle);
+        const auto expected = reference.match(image);
+        const auto actual = automatic.match(image);
+        expect(expected.valid() && actual.valid(),
+               "both scan strides should produce a result");
+        expect(cv::norm(expected.center - actual.center) <= 1e-9 &&
+                   angleError(expected.angle_deg, actual.angle_deg) <= 1e-9,
+               "the sparse scan should reach the same pose as an exhaustive one");
+    }
+
+    bool threw = false;
+    try {
+        orient_match::MatcherOptions options = testOptions();
+        options.angle_scan_stride = -1;
+        const orient_match::Matcher invalid_matcher(templ, options);
+        (void)invalid_matcher;
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    expect(threw, "a negative angle_scan_stride should be rejected");
+}
+
 void statusAndValidationRegression() {
     const cv::Mat templ = makeTemplate();
     const orient_match::Matcher matcher(templ, testOptions());
@@ -257,6 +373,8 @@ int main() {
         poseRegression();
         maskRegression();
         partialAngleRangeRegression();
+        absenceRegression();
+        scanStrideRegression();
         statusAndValidationRegression();
         determinismRegression();
         concurrentMatchRegression();

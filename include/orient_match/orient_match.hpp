@@ -24,13 +24,41 @@ struct MatcherOptions {
     double angle_extent_deg = 360.0;  // Half-open range [start, start + extent).
     double coarse_angle_step_deg = 3.0;
     double fine_angle_step_deg = 1.0;
+
+    // How many candidate positions the refinement stages examine. Candidates are kept at
+    // least half a rotation canvas apart, so this counts distinct places in the image
+    // rather than several angles of the same place.
     int refine_top_k = 5;
+
+    // Only every angle_scan_stride-th bank angle takes part in the global search over the
+    // whole image; the angles in between are examined locally, around the positions that
+    // search returns. Since the global search is by far the most expensive stage, this is
+    // the main speed control. 0 picks a stride from the canvas size, such that one scan
+    // step moves the template rim by a few coarse pixels. 1 searches every angle globally.
+    int angle_scan_stride = 0;
+
+    // Acceptance test for "is the template present at all?".
+    //
+    // A negative min_score accepts every pose, which is the default. When it is set, a
+    // best pose scoring below it is reported as below_min_score instead of ok. The right
+    // value is template- and application-specific: calibrate it on images that do and do
+    // not contain the object, using MatchResult::score and MatchResult::margin.
+    //
+    // The coarse stage also gives up early, skipping all full-resolution work, once its
+    // best score falls below coarse_gate_ratio * min_score. A true match scores lower at
+    // the coarse level than it finally does, so this ratio is the assumed floor on that
+    // shrinkage: over the reference scenes it never fell below 0.79 at coarse_scale 0.5,
+    // or below 0.70 at coarse_scale 0.35. Lower the ratio towards 0 to make an early
+    // rejection less likely, at the cost of searching empty images in full.
+    double min_score = -1.0;
+    double coarse_gate_ratio = 0.6;
 };
 
 enum class MatchStatus {
     ok,
     template_larger_than_image,
     no_finite_score,
+    below_min_score,
 };
 
 /** Best pose found for the template. Coordinates use OpenCV's pixel-center convention. */
@@ -39,6 +67,20 @@ struct MatchResult {
     cv::Point2d center{};       // Absolute template-center position in the input image.
     double angle_deg = 0.0;    // Counter-clockwise, normalized to [0, 360).
     double score = -1.0;       // Normalized orientation correlation, approximately [-1, 1].
+
+    // Diagnostics from the coarse level, for calibrating min_score. Both are filled in for
+    // rejected results too; when the coarse level rejects early, the pose fields above are
+    // left unset, because no pose was refined.
+    //
+    // coarse_score is the best coarse-resolution score once the angle has been refined
+    // locally. It always runs below the final score, by the factor coarse_gate_ratio
+    // bounds, and it is what the early rejection tests.
+    //
+    // margin is how far the best angle of the global scan stands above the best one at
+    // least one rotation-canvas radius away. A present object wins its position outright;
+    // an empty scene leaves look-alike peaks near a tie.
+    double coarse_score = -1.0;
+    double margin = 0.0;
 
     [[nodiscard]] bool valid() const noexcept { return status == MatchStatus::ok; }
     explicit operator bool() const noexcept { return valid(); }
