@@ -21,8 +21,9 @@ z = (gx, gy) / (sqrt(gx^2 + gy^2) + eps)
 ```
 
 and normalized, non-centered correlation between the two vector-field components.
-It searches all positions and coarse angles in a downsampled image, retains the best
-angle candidates, and refines their positions and neighboring angles at full resolution.
+It searches all positions in a downsampled image at a sparse set of angles, keeps the best
+candidates that stand apart from one another, and then recovers the skipped angles and the
+exact pose locally at full resolution.
 
 ## What is compared
 
@@ -39,8 +40,11 @@ The score of one pose is the energy-normalized sum of those dot products.
 
 The template field, its square rotation canvas, and the coarse rotated bank are built once,
 when the `Matcher` is constructed. Each frame is then converted to an orientation field,
-searched globally at reduced resolution, and refined locally at full resolution. The diagram
-is schematic and reflects the current fixed-scale, single-best-match scope.
+scanned globally at reduced resolution over a sparse set of angles, and refined locally --
+first over the angles the scan stepped across, then at full resolution. Because every stage
+correlates many angles against one image window, that window is transformed once and reused
+across them, which is where most of the per-frame cost used to go. The diagram is schematic
+and reflects the current fixed-scale, single-best-match scope.
 
 ## Positioning
 
@@ -87,11 +91,86 @@ representations or use cases:
 | [`batchmatch`](https://github.com/wlruys/batchmatch) | Normalized gradient fields and transformation search | A PyTorch/FFT-oriented registration toolkit for batched affine grids, rather than a small C++ local-refinement matcher. |
 | [`corrmatch-rs`](https://github.com/VitalyVorobyev/corrmatch-rs) | Rotation-aware coarse-to-fine template search | Uses intensity ZNCC/SSD in Rust rather than dense gradient-orientation correlation in OpenCV. |
 
+[`benchmarks/`](./benchmarks) measures OrientMatch against the ones that can be run
+directly -- a rotated-bank `matchTemplate`, the same coarse-to-fine search scoring
+intensity instead of orientation, Fourier-Mellin, and ORB/SIFT with RANSAC -- on Kodak
+images under rotation, noise, occlusion, illumination change, JPEG and scale mismatch.
+The summary is below; the protocol and its limits are in that directory's README.
+
 No claim is made that this list is exhaustive. The practical distinction is the complete
 combination exposed by this library: a single-template C++ API, dense continuous
 orientation fields, normalized correlation, and coarse-to-fine translation/rotation
 search. For a new application, benchmark the alternatives above on representative data
 rather than assuming one method is universally faster or more accurate.
+
+## Measured against other methods
+
+Kodak photographs, 384x256 scenes, a 96x96 template placed at a known pose, 12 images x 3
+offsets x 9 angles x 11 conditions. A case succeeds when the angle is within 5 degrees and
+the centre within 5 pixels. The protocol, the baselines and their limits are in
+[`benchmarks/`](./benchmarks); `benchmarks/results.csv.gz` holds every row behind these
+tables.
+
+### Success rate by condition
+
+| Method | clean | noise 25 | noise 50 | occl. 25% | occl. 50% | illum | JPEG 20 | scale 0.95 | scale 1.05 | overall |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **OrientMatch** | 100.0 | 100.0 | 96.0 | 99.1 | 79.3 | 100.0 | 100.0 | 100.0 | 100.0 | **97.2** |
+| NCC coarse-to-fine | 100.0 | 90.4 | 85.2 | 88.6 | 52.5 | 100.0 | 99.4 | 94.8 | 97.2 | 89.8 |
+| NCC exhaustive 1° | 100.0 | 89.8 | 83.3 | 90.7 | 61.4 | 100.0 | 99.4 | 94.4 | 97.2 | 90.7 |
+| Fourier-Mellin | 9.9 | 7.4 | 5.9 | 6.5 | 4.6 | 10.5 | 6.2 | 6.2 | 6.2 | 7.0 |
+| ORB + RANSAC | 64.2 | 44.4 | 16.4 | 0.6 | 0.0 | 55.9 | 53.7 | 58.6 | 60.8 | 39.4 |
+| SIFT + RANSAC | 93.2 | 65.1 | 36.4 | 87.3 | 75.3 | 74.4 | 89.2 | 93.8 | 91.4 | 78.5 |
+
+### Accuracy where the method succeeded, and cost
+
+`OMP_NUM_THREADS=8` on an otherwise idle 22-core machine. One-shot includes preparing the
+template; per frame is the search alone, with per-template work hoisted out -- for every
+method, not only this one.
+
+| Method | median angle err [deg] | median position err [px] | one-shot [ms] | per frame [ms] |
+|---|---|---|---|---|
+| **OrientMatch** | 0.25 | 0.32 | 26.4 | **14.2** |
+| NCC coarse-to-fine | 0.25 | 0.37 | 53.9 | 46.6 |
+| NCC exhaustive 1° | 0.25 | 0.37 | 502.4 | 495.7 |
+| Fourier-Mellin | 0.93 | 0.54 | 23.8 | 23.8 |
+| ORB + RANSAC | 0.81 | 0.51 | 5.2 | 4.6 |
+| SIFT + RANSAC | 0.06 | 0.16 | 17.1 | 15.1 |
+
+### Telling a present template from an absent one
+
+AUC is the probability that a present template outscores an absent one, over the negative
+conditions where the template comes from a different image. Scores are comparable only
+within a row: the feature methods report an inlier count, not a correlation.
+
+| Method | AUC clean | AUC noise 25 |
+|---|---|---|
+| **OrientMatch** | 1.000 | **0.999** |
+| NCC coarse-to-fine | 1.000 | 0.922 |
+| NCC exhaustive 1° | 1.000 | 0.923 |
+| Fourier-Mellin | 0.640 | 0.624 |
+| ORB + RANSAC | 0.825 | 0.741 |
+| SIFT + RANSAC | 0.967 | 0.834 |
+
+### What to read out of this
+
+The row that matters most is **NCC coarse-to-fine**: it runs the identical search --
+same coarse level, same angle bank, same refinement, same candidate count -- and scores
+intensity correlation instead of the orientation field. The 89.8% against 97.2% is
+therefore about the scoring function, not the search. The exhaustive 1 degree NCC lands in
+the same place (90.7%) at 35 times the cost per frame, which says the coarse-to-fine search
+is not what limits it either.
+
+Feature matching is a different trade. SIFT is the most *precise* method here by a wide
+margin -- 0.06 degrees against a correlation method's quantization floor of 0.25 -- and it
+is fast, but it needs texture: at noise sigma 50 it finds the pose in 36% of cases against
+OrientMatch's 96%. ORB is the cheapest method by 3x and the least reliable. Fourier-Mellin
+is not competitive here at all, because it assumes the two images differ by one global
+rotation, which a small template inside a larger scene does not.
+
+None of this generalizes past the setting measured: one grayscale template, known scale,
+one instance, photographic scenes. Templates that are textureless, images with many
+instances, or an unknown scale are all outside it.
 
 ## Requirements
 
@@ -132,6 +211,7 @@ options.coarse_scale = 0.5;
 options.coarse_angle_step_deg = 3.0;
 options.fine_angle_step_deg = 1.0;
 options.refine_top_k = 5;
+options.angle_scan_stride = 0;  // 0 lets the matcher pick the global-scan angle step
 
 // Construction precomputes the template field and coarse rotated-template bank.
 orient_match::Matcher matcher(templ, options);
@@ -142,6 +222,45 @@ if (result) {
     std::cout << result.angle_deg << " deg, score=" << result.score << "\n";
 }
 ```
+
+### Deciding whether the template is there at all
+
+By default `match()` always reports its best pose, however weak. Set `min_score` to make it
+answer the presence question as well:
+
+```cpp
+options.min_score = 0.6;   // reject anything below this
+orient_match::Matcher matcher(templ, options);
+
+const auto result = matcher.match(image);
+if (result) {
+    // found
+} else if (result.status == orient_match::MatchStatus::below_min_score) {
+    // the template is not in this image, or is too occluded to recognise
+}
+```
+
+There is no universal threshold: the score depends on how much of the template is textured,
+so calibrate `min_score` on images that do and do not contain your object. Two fields help
+with that, and are filled in for rejected results too:
+
+- `MatchResult::score` -- the final normalized correlation.
+- `MatchResult::margin` -- how far the best coarse candidate stands above the best one at
+  least one canvas radius away. A present object wins its position outright; an empty scene
+  produces a near tie between look-alike peaks.
+
+On the reference scenes (cluttered backgrounds, each also holding a mirrored copy of the
+template as a hard negative), a present object scored 0.76 or above and an absent one 0.52
+or below, so any threshold in between separated them. A mirrored look-alike is the strongest
+false positive; an object at the wrong scale is rejected easily, because scale is fixed.
+Detection degrades gracefully with occlusion -- 0.74 at 25% occluded and 0.51 at 50% -- and
+70% occlusion is indistinguishable from absence.
+
+When `min_score` is set, the coarse level also gives up early on images whose best coarse
+score cannot plausibly reach it, skipping all full-resolution work. On empty scenes that
+saves a little over 40% of the frame time; `coarse_gate_ratio` controls how eagerly it does
+so, and its default leaves a margin against the lowest coarse-to-final score ratio measured
+on the reference scenes.
 
 An optional single-channel template mask is supported:
 
@@ -178,18 +297,28 @@ target_link_libraries(my_program PRIVATE OrientMatch::orient_match)
 1. Blur the grayscale image and template, then compute Sobel gradients.
 2. Normalize each vector using a soft, image-adaptive gate.
 3. Apply a Gaussian window and optional mask to the template field.
-4. At the coarse image level, correlate every configured coarse rotation over all valid
-   translations.
-5. Keep the best `refine_top_k` coarse-angle candidates.
-6. At full resolution, search a local position ROI and neighboring fine angles.
-7. Return the highest normalized vector-field correlation.
+4. At the coarse image level, correlate every `angle_scan_stride`-th rotation of the bank
+   over all valid translations. The image planes are transformed once and every angle of
+   the scan reuses them; the two angles half a turn apart share their energy correlation,
+   whose support mask is identical.
+5. Keep the best `refine_top_k` candidates, discarding any that lies within half a canvas
+   of a better one, so each is a distinct place rather than another angle of the same place.
+6. Around each candidate, still on the coarse image, try the bank angles the scan stepped
+   across.
+7. At full resolution, search a local position ROI and the neighboring fine angles; search
+   the leading candidate one ring wider, because the coarse level can be a step or two off
+   the full-resolution optimum.
+8. Return the highest normalized vector-field correlation, subject to `min_score`.
 
 ![Coarse-to-fine position and rotation search](./figs/coarse-to-fine.svg)
 
-The score is a volume over `(x, y, θ)`. The coarse stage samples all of it on a downsampled
-image, and the fine stage looks closely only around the top `K` poses, which costs a small
-fraction of a full-resolution exhaustive search. This is a speed-oriented heuristic and does
-not guarantee that a narrow global optimum survives the coarse stage.
+The score is a volume over `(x, y, θ)`. The global stage samples it coarsely in every axis --
+half resolution, and every fourth angle -- and the later stages look closely only around the
+top `K` places, which costs a small fraction of a full-resolution exhaustive search. Sparse
+angle sampling is safe because the score varies smoothly with angle: over the reference
+scenes, canvases from 64 to 500 pixels, a 12 degree scan reproduced the pose of an
+exhaustive scan exactly, with the first differences appearing at 24 degrees. It remains a
+speed-oriented heuristic and does not guarantee that a narrow global optimum survives.
 
 All three figures are generated from a run of the algorithm on a synthetic scene; the
 scripts live in [`tools/figures`](./tools/figures).
@@ -201,7 +330,8 @@ suitable for repeated use on multiple frames. The object is immutable after cons
 ## Scope and known limitations
 
 - Scale is assumed known. A scale mismatch is not searched.
-- Only the single best match is returned; there is no NMS or multi-instance output yet.
+- Only the single best match is returned. Candidates are separated internally so that the
+  refinement budget covers distinct places, but there is no multi-instance output yet.
 - Position and angle are discrete. There is no subpixel/sub-degree peak interpolation yet.
 - Coarse-to-fine search is heuristic and can miss a narrow global optimum.
 - Excessively fine angle grids are rejected instead of allocating an unbounded template
@@ -209,9 +339,13 @@ suitable for repeated use on multiple frames. The object is immutable after cons
   tasks per match.
 - `coarse_scale` must leave the square template canvas at least 3 x 3 pixels.
 - The correlation score is not a calibrated probability or universal detection threshold.
+  `min_score` must be calibrated per template on representative positive and negative images.
 - A square rotation canvas must fit entirely inside the search image.
 - The current implementation rotates full-resolution templates during refinement; very
   large templates or wide fine searches can be expensive.
+- Per-frame work is bound by memory bandwidth more than by arithmetic, so throughput stops
+  improving well before every core is busy. On a 22-core test machine the best setting was
+  around 8 threads; more than that made every frame slower.
 - This project does not currently attempt to replace feature-based matching, learned
   detectors, or full affine registration outside its stated fixed-scale setting.
 
