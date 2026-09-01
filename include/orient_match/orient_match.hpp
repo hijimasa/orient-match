@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string_view>
+#include <vector>
 
 #include <opencv2/core.hpp>
 
@@ -25,10 +26,24 @@ struct MatcherOptions {
     double coarse_angle_step_deg = 3.0;
     double fine_angle_step_deg = 1.0;
 
-    // How many candidate positions the refinement stages examine. Candidates are kept at
-    // least half a rotation canvas apart, so this counts distinct places in the image
-    // rather than several angles of the same place.
+    // How many candidate positions the refinement stages examine. Candidates are kept
+    // apart from one another, so this counts distinct places in the image rather than
+    // several angles of the same place - and it is therefore also the largest number of
+    // matches matchAll() can report.
     int refine_top_k = 5;
+
+    // How far apart two candidate places must be at the coarse level, as a fraction of
+    // the rotation canvas. It keeps the refinement budget on distinct places instead of
+    // on several angles of one; lower it when instances stand close together, knowing the
+    // budget then goes to near-duplicates. Two instances closer than this are reported as
+    // one, whatever max_overlap says.
+    double candidate_separation = 0.5;
+
+    // matchAll() drops a pose whose template rectangle overlaps a better one by more than
+    // this, as intersection over union. Unlike candidate_separation this is measured on
+    // the refined poses, using the template's own rectangle at its detected angle rather
+    // than the square canvas around it.
+    double max_overlap = 0.5;
 
     // Only every angle_scan_stride-th bank angle takes part in the global search over the
     // whole image; the angles in between are examined locally, around the positions that
@@ -114,6 +129,17 @@ public:
             const MatcherOptions &options = {});
 
     [[nodiscard]] MatchResult match(const cv::Mat &image) const;
+
+    /**
+     * Every distinct pose found, best first.
+     *
+     * At most refine_top_k entries, each at or above min_score and none overlapping a
+     * better one by more than max_overlap. The list is empty when nothing qualifies;
+     * match() is the form that reports why. With min_score left at its default no pose is
+     * ever rejected on score, so the list runs to refine_top_k entries and its tail is
+     * whatever the image happened to offer - set min_score before relying on the length.
+     */
+    [[nodiscard]] std::vector<MatchResult> matchAll(const cv::Mat &image) const;
 
     [[nodiscard]] cv::Size templateSize() const noexcept;
     [[nodiscard]] int canvasSize() const noexcept;

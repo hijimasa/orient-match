@@ -214,6 +214,110 @@ void absenceRegression() {
     expect(threw, "coarse_gate_ratio outside [0, 1] should be rejected");
 }
 
+// Paste the template into an existing image, so a scene can hold several instances.
+void pasteTemplate(cv::Mat &image, const cv::Mat &templ, cv::Point2d center,
+                   double angle_deg) {
+    const cv::Point2f source_center((templ.cols - 1) / 2.0F, (templ.rows - 1) / 2.0F);
+    cv::Mat transform = cv::getRotationMatrix2D(source_center, angle_deg, 1.0);
+    transform.at<double>(0, 2) += center.x - source_center.x;
+    transform.at<double>(1, 2) += center.y - source_center.y;
+    cv::Mat patch;
+    cv::Mat cover(templ.size(), CV_8U, cv::Scalar(255));
+    cv::Mat covered;
+    cv::warpAffine(templ, patch, transform, image.size(), cv::INTER_LINEAR,
+                   cv::BORDER_CONSTANT, cv::Scalar(0));
+    cv::warpAffine(cover, covered, transform, image.size(), cv::INTER_NEAREST,
+                   cv::BORDER_CONSTANT, cv::Scalar(0));
+    patch.copyTo(image, covered);
+}
+
+void multiMatchRegression() {
+    const cv::Mat templ = makeTemplate();
+
+    struct Instance {
+        cv::Point2d center;
+        double angle;
+    };
+    const Instance instances[] = {
+        {{80.5, 70.5}, 12.0}, {{230.5, 70.5}, 148.0}, {{150.5, 180.5}, 274.0}};
+    cv::Mat scene = makeClutter(cv::Size(320, 240), 11);
+    for (const Instance &instance : instances) {
+        pasteTemplate(scene, templ, instance.center, instance.angle);
+    }
+
+    orient_match::MatcherOptions options = testOptions();
+    options.min_score = 0.6;
+    const orient_match::Matcher matcher(templ, options);
+
+    const std::vector<orient_match::MatchResult> matches = matcher.matchAll(scene);
+    expect(matches.size() == 3, "matchAll should report every instance in the scene");
+
+    for (std::size_t i = 1; i < matches.size(); ++i) {
+        expect(matches[i - 1].score >= matches[i].score,
+               "matchAll should report the best score first");
+    }
+    for (const Instance &instance : instances) {
+        const bool found = std::any_of(
+            matches.begin(), matches.end(), [&](const orient_match::MatchResult &m) {
+                return cv::norm(m.center - instance.center) <= 1.5 &&
+                       angleError(m.angle_deg, instance.angle) <= 1.01;
+            });
+        expect(found, "every planted instance should appear in matchAll");
+    }
+    for (const orient_match::MatchResult &match : matches) {
+        expect(match.valid(), "every reported match should be valid()");
+        expect(match.score >= options.min_score, "matchAll should honour min_score");
+    }
+
+    // The two entry points agree on the leading pose.
+    const orient_match::MatchResult best = matcher.match(scene);
+    expect(!matches.empty() && sameResult(best, matches.front()),
+           "match() should equal the first entry of matchAll()");
+
+    // Nothing planted: no matches, and match() explains itself.
+    const cv::Mat empty_scene = makeClutter(cv::Size(320, 240), 29);
+    expect(matcher.matchAll(empty_scene).empty(),
+           "matchAll should report nothing when the template is absent");
+    expect(matcher.match(empty_scene).status ==
+               orient_match::MatchStatus::below_min_score,
+           "match() should still report why nothing was accepted");
+
+    // Overlap suppression: with nothing suppressed, one instance can be reported by
+    // several neighbouring poses; with the default it is reported once.
+    orient_match::MatcherOptions loose = options;
+    loose.candidate_separation = 0.05;
+    loose.max_overlap = 0.999;
+    const std::size_t unsuppressed =
+        orient_match::Matcher(templ, loose).matchAll(scene).size();
+    loose.max_overlap = 0.5;
+    const std::size_t suppressed =
+        orient_match::Matcher(templ, loose).matchAll(scene).size();
+    expect(suppressed <= unsuppressed,
+           "a lower max_overlap should not report more poses");
+
+    bool threw = false;
+    try {
+        orient_match::MatcherOptions bad = testOptions();
+        bad.max_overlap = 1.5;
+        const orient_match::Matcher invalid_matcher(templ, bad);
+        (void)invalid_matcher;
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    expect(threw, "max_overlap outside [0, 1] should be rejected");
+
+    threw = false;
+    try {
+        orient_match::MatcherOptions bad = testOptions();
+        bad.candidate_separation = -0.1;
+        const orient_match::Matcher invalid_matcher(templ, bad);
+        (void)invalid_matcher;
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    expect(threw, "candidate_separation outside [0, 1] should be rejected");
+}
+
 void scanStrideRegression() {
     const cv::Mat templ = makeTemplate();
 
@@ -374,6 +478,7 @@ int main() {
         maskRegression();
         partialAngleRangeRegression();
         absenceRegression();
+        multiMatchRegression();
         scanStrideRegression();
         statusAndValidationRegression();
         determinismRegression();

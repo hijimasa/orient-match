@@ -132,6 +132,13 @@ void validateOptions(const MatcherOptions &o) {
     if (o.angle_scan_stride < 0) {
         throw std::invalid_argument("angle_scan_stride must be >= 0");
     }
+    if (!finite(o.candidate_separation) || o.candidate_separation < 0.0 ||
+        o.candidate_separation > 1.0) {
+        throw std::invalid_argument("candidate_separation must be in [0, 1]");
+    }
+    if (!finite(o.max_overlap) || o.max_overlap < 0.0 || o.max_overlap > 1.0) {
+        throw std::invalid_argument("max_overlap must be in [0, 1]");
+    }
     if (!finite(o.min_score) || o.min_score > 1.0) {
         throw std::invalid_argument("min_score must be finite and <= 1");
     }
@@ -643,6 +650,34 @@ std::vector<std::pair<int, int>> pairScannedAngles(const std::vector<int> &scan,
     return tasks;
 }
 
+/**
+ * The template's own rectangle at a detected pose.
+ *
+ * cv::RotatedRect turns clockwise while a match angle turns counter-clockwise, hence the
+ * sign. This is the actual footprint, not the square canvas around it, which for a long
+ * thin template is a much smaller thing to measure overlap with.
+ */
+cv::RotatedRect footprint(cv::Size template_size, const MatchResult &match) {
+    return {cv::Point2f(static_cast<float>(match.center.x),
+                        static_cast<float>(match.center.y)),
+            cv::Size2f(static_cast<float>(template_size.width),
+                       static_cast<float>(template_size.height)),
+            static_cast<float>(-match.angle_deg)};
+}
+
+/** Intersection over union of two template footprints. */
+double overlapRatio(const cv::RotatedRect &left, const cv::RotatedRect &right) {
+    std::vector<cv::Point2f> hull;
+    if (cv::rotatedRectangleIntersection(left, right, hull) == cv::INTERSECT_NONE ||
+        hull.size() < 3) {
+        return 0.0;
+    }
+    const double intersection = cv::contourArea(hull);
+    const double both = static_cast<double>(left.size.area()) +
+                        static_cast<double>(right.size.area()) - intersection;
+    return both > 0.0 ? intersection / both : 0.0;
+}
+
 /** Full-resolution refinement window around a canvas position found at the coarse level. */
 cv::Rect fullResolutionRoi(const cv::Mat &image, cv::Point coarse_location, int coarse_size,
                            int canvas_size, double coarse_scale) {
@@ -740,6 +775,14 @@ public:
         coarse_mask_twin = maskTwins(coarse_angles, coarse_templates);
     }
 
+    /** What one search found: the best pose either way, and the accepted ones. */
+    struct Outcome {
+        MatchResult best;                  // top pose, or the failure; status always set
+        std::vector<MatchResult> matches;  // accepted, best first
+    };
+
+    [[nodiscard]] Outcome search(const cv::Mat &image) const;
+
     MatcherOptions options;
     cv::Size template_size;
     OrientationCanvas full;
@@ -768,35 +811,37 @@ int Matcher::canvasSize() const noexcept { return impl_->full.size; }
 
 const MatcherOptions &Matcher::options() const noexcept { return impl_->options; }
 
-MatchResult Matcher::match(const cv::Mat &image) const {
-    const MatcherOptions &options = impl_->options;
+Matcher::Impl::Outcome Matcher::Impl::search(const cv::Mat &image) const {
+    Outcome outcome;
     validateSingleChannel(image, "image");
-    if (impl_->full.size > image.cols || impl_->full.size > image.rows) {
-        return {MatchStatus::template_larger_than_image};
+    if (full.size > image.cols || full.size > image.rows) {
+        outcome.best.status = MatchStatus::template_larger_than_image;
+        return outcome;
     }
 
     cv::Mat coarse_image;
     cv::resize(image, coarse_image, cv::Size(), options.coarse_scale, options.coarse_scale,
                cv::INTER_AREA);
-    if (impl_->coarse.size > coarse_image.cols || impl_->coarse.size > coarse_image.rows) {
-        return {MatchStatus::template_larger_than_image};
+    if (coarse.size > coarse_image.cols || coarse.size > coarse_image.rows) {
+        outcome.best.status = MatchStatus::template_larger_than_image;
+        return outcome;
     }
 
     const ImagePlanes coarse_planes = makeImagePlanes(coarse_image, options);
     const ImageSpectra coarse_spectra = makeSpectra(coarse_planes);
-    const int coarse_count = static_cast<int>(impl_->coarse_templates.size());
+    const int coarse_count = static_cast<int>(coarse_templates.size());
     const bool full_circle = options.angle_extent_deg == 360.0;
 
     // ---- global search: every position, but only every scan_stride-th angle ----
     std::vector<int> scan;
-    scan.reserve(static_cast<std::size_t>(coarse_count / impl_->scan_stride + 1));
-    for (int i = 0; i < coarse_count; i += impl_->scan_stride) {
+    scan.reserve(static_cast<std::size_t>(coarse_count / scan_stride + 1));
+    for (int i = 0; i < coarse_count; i += scan_stride) {
         scan.push_back(i);
     }
 
     // The two angles of a half-turn pair share their image-energy correlation.
     const std::vector<std::pair<int, int>> coarse_tasks =
-        pairScannedAngles(scan, impl_->coarse_mask_twin);
+        pairScannedAngles(scan, coarse_mask_twin);
 
     // Angles left out of the scan keep an invalid score and are dropped by rankPeaks.
     std::vector<Peak> coarse_peaks(static_cast<std::size_t>(coarse_count));
@@ -812,18 +857,20 @@ MatchResult Matcher::match(const cv::Mat &image) const {
                 continue;
             }
             const std::size_t index = static_cast<std::size_t>(i);
-            const RotatedTemplate &templ = impl_->coarse_templates[index];
+            const RotatedTemplate &templ = coarse_templates[index];
             correlate(coarse_spectra, templ, numerator, energy);
             coarse_peaks[index] = findPeak(numerator, energy, templ);
         }
     }
 
     // ---- candidate positions ----
-    // Two positions closer than half a canvas are the same detection seen twice.
-    const int separation = std::max(1, impl_->coarse.size / 2);
+    // Two positions this close are the same detection seen twice.
+    const int separation =
+        std::max(1, static_cast<int>(coarse.size * options.candidate_separation));
     const std::vector<std::size_t> ranked = rankPeaks(coarse_peaks);
     if (ranked.empty()) {
-        return {MatchStatus::no_finite_score};
+        outcome.best.status = MatchStatus::no_finite_score;
+        return outcome;
     }
     const std::vector<std::size_t> candidates =
         selectCandidates(coarse_peaks, ranked, options.refine_top_k, separation);
@@ -849,11 +896,11 @@ MatchResult Matcher::match(const cv::Mat &image) const {
         refined[c] = {coarse_peaks[candidates[c]].location,
                       static_cast<int>(candidates[c]), coarse_peaks[candidates[c]].score};
     }
-    if (impl_->scan_stride > 1) {
-        const double half_gap = 0.5 * impl_->scan_stride * options.coarse_angle_step_deg;
+    if (scan_stride > 1) {
+        const double half_gap = 0.5 * scan_stride * options.coarse_angle_step_deg;
         const int pad = static_cast<int>(std::ceil(
-                            impl_->coarse.size * std::sin(half_gap * kPi / 180.0))) + 2;
-        const int radius = impl_->scan_stride / 2;
+                            coarse.size * std::sin(half_gap * kPi / 180.0))) + 2;
+        const int radius = scan_stride / 2;
 
         std::vector<cv::Rect> windows(candidates.size());
         std::vector<ImageSpectra> spectra(candidates.size());
@@ -861,7 +908,7 @@ MatchResult Matcher::match(const cv::Mat &image) const {
         for (std::size_t c = 0; c < candidates.size(); ++c) {
             const cv::Point &location = refined[c].location;
             cv::Rect window(location.x - pad, location.y - pad,
-                            impl_->coarse.size + 2 * pad, impl_->coarse.size + 2 * pad);
+                            coarse.size + 2 * pad, coarse.size + 2 * pad);
             windows[c] = window & cv::Rect(0, 0, coarse_planes.x.cols, coarse_planes.x.rows);
             for (const int index : neighbourAngles(refined[c].angle_index, radius,
                                                    coarse_count, full_circle)) {
@@ -885,7 +932,7 @@ MatchResult Matcher::match(const cv::Mat &image) const {
             const AngleTask &task = local[static_cast<std::size_t>(i)];
             peaks[static_cast<std::size_t>(i)] = findPeak(
                 spectra[task.candidate],
-                impl_->coarse_templates[static_cast<std::size_t>(task.angle_index)]);
+                coarse_templates[static_cast<std::size_t>(task.angle_index)]);
         }
         std::vector<double> best_score(candidates.size(), kInvalidScore);
         for (std::size_t i = 0; i < local.size(); ++i) {
@@ -912,7 +959,8 @@ MatchResult Matcher::match(const cv::Mat &image) const {
     if (options.min_score >= 0.0 &&
         diagnostics.coarse_score < options.coarse_gate_ratio * options.min_score) {
         diagnostics.status = MatchStatus::below_min_score;
-        return diagnostics;
+        outcome.best = diagnostics;
+        return outcome;
     }
 
     // ---- full-resolution refinement ----
@@ -920,8 +968,8 @@ MatchResult Matcher::match(const cv::Mat &image) const {
     std::vector<cv::Rect> rois(refined.size());
     std::vector<ImageSpectra> roi_spectra(refined.size());
     for (std::size_t i = 0; i < refined.size(); ++i) {
-        rois[i] = fullResolutionRoi(image, refined[i].location, impl_->coarse.size,
-                                    impl_->full.size, options.coarse_scale);
+        rois[i] = fullResolutionRoi(image, refined[i].location, coarse.size,
+                                    full.size, options.coarse_scale);
     }
     // Every angle of a candidate is correlated against the same window, so the window is
     // transformed once here rather than inside each of those correlations.
@@ -946,8 +994,8 @@ MatchResult Matcher::match(const cv::Mat &image) const {
     std::vector<FineTask> tasks;
     for (std::size_t i = 0; i < refined.size(); ++i) {
         const double base =
-            impl_->coarse_angles[static_cast<std::size_t>(refined[i].angle_index)];
-        for (double offset : impl_->fine_offsets) {
+            coarse_angles[static_cast<std::size_t>(refined[i].angle_index)];
+        for (double offset : fine_offsets) {
             if (in_range(base + offset)) {
                 tasks.push_back({i, base + offset});
             }
@@ -962,7 +1010,7 @@ MatchResult Matcher::match(const cv::Mat &image) const {
         for (int i = static_cast<int>(first); i < static_cast<int>(tasks.size()); ++i) {
             const FineTask &task = tasks[static_cast<std::size_t>(i)];
             fine_peaks[static_cast<std::size_t>(i)] =
-                findPeak(roi_spectra[task.candidate], rotateCanvas(impl_->full, task.angle));
+                findPeak(roi_spectra[task.candidate], rotateCanvas(full, task.angle));
         }
     };
     run_tasks(0);
@@ -979,12 +1027,12 @@ MatchResult Matcher::match(const cv::Mat &image) const {
 
     // The coarse level can be a step or two off the full-resolution optimum, so the
     // leading candidate - and only that one - is searched one ring further out.
-    if (!tasks.empty() && !impl_->outer_fine_offsets.empty()) {
+    if (!tasks.empty() && !outer_fine_offsets.empty()) {
         const std::size_t candidate = tasks[leading_task()].candidate;
         const double base =
-            impl_->coarse_angles[static_cast<std::size_t>(refined[candidate].angle_index)];
+            coarse_angles[static_cast<std::size_t>(refined[candidate].angle_index)];
         const std::size_t first = tasks.size();
-        for (double offset : impl_->outer_fine_offsets) {
+        for (double offset : outer_fine_offsets) {
             if (in_range(base + offset)) {
                 tasks.push_back({candidate, base + offset});
             }
@@ -993,28 +1041,74 @@ MatchResult Matcher::match(const cv::Mat &image) const {
         run_tasks(first);
     }
 
-    MatchResult best = diagnostics;
-    best.score = kInvalidScore;
+    // The best pose at each place examined, kept apart rather than merged, so that a
+    // second instance of the template is still a result and not just a runner-up.
+    std::vector<MatchResult> places(refined.size(), diagnostics);
+    for (MatchResult &place : places) {
+        place.score = kInvalidScore;
+    }
     for (std::size_t i = 0; i < tasks.size(); ++i) {
         const Peak &peak = fine_peaks[i];
-        if (peak.score <= best.score) {
+        MatchResult &place = places[tasks[i].candidate];
+        if (peak.score <= place.score) {
             continue;
         }
         const cv::Rect &roi = rois[tasks[i].candidate];
-        best.status = MatchStatus::ok;
-        best.angle_deg = wrap360(tasks[i].angle);
-        best.center.x = roi.x + peak.location.x + (impl_->full.size - 1) / 2.0;
-        best.center.y = roi.y + peak.location.y + (impl_->full.size - 1) / 2.0;
-        best.score = peak.score;
+        place.status = MatchStatus::ok;
+        place.angle_deg = wrap360(tasks[i].angle);
+        place.center.x = roi.x + peak.location.x + (full.size - 1) / 2.0;
+        place.center.y = roi.y + peak.location.y + (full.size - 1) / 2.0;
+        place.score = peak.score;
     }
-    if (best.score <= kInvalidScore + 0.01) {
+
+    std::vector<std::size_t> order(places.size());
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        order[i] = i;
+    }
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t left, std::size_t right) {
+        return places[left].score > places[right].score;
+    });
+
+    if (order.empty() || places[order.front()].score <= kInvalidScore + 0.01) {
         diagnostics.status = MatchStatus::no_finite_score;
-        return diagnostics;
+        outcome.best = diagnostics;
+        return outcome;
     }
-    if (options.min_score >= 0.0 && best.score < options.min_score) {
-        best.status = MatchStatus::below_min_score;
+    outcome.best = places[order.front()];
+    if (options.min_score >= 0.0 && outcome.best.score < options.min_score) {
+        outcome.best.status = MatchStatus::below_min_score;
     }
-    return best;
+
+    // A place is reported only if it clears the threshold and does not sit on top of a
+    // better one. Overlap is measured on the template's own rectangle at its detected
+    // angle, which is what a caller means by "the same object".
+    for (const std::size_t index : order) {
+        const MatchResult &place = places[index];
+        if (place.status != MatchStatus::ok) {
+            continue;
+        }
+        if (options.min_score >= 0.0 && place.score < options.min_score) {
+            continue;
+        }
+        const cv::RotatedRect box = footprint(template_size, place);
+        const bool clear = std::none_of(
+            outcome.matches.begin(), outcome.matches.end(), [&](const MatchResult &kept) {
+                return overlapRatio(box, footprint(template_size, kept)) >
+                       options.max_overlap;
+            });
+        if (clear) {
+            outcome.matches.push_back(place);
+        }
+    }
+    return outcome;
+}
+
+MatchResult Matcher::match(const cv::Mat &image) const {
+    return impl_->search(image).best;
+}
+
+std::vector<MatchResult> Matcher::matchAll(const cv::Mat &image) const {
+    return impl_->search(image).matches;
 }
 
 }  // namespace orient_match
